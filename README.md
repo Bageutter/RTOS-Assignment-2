@@ -1,0 +1,1 @@
+I have no clue wtf is the read_a_text_file-for assigment2.c file is for :(
