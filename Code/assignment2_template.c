@@ -126,6 +126,7 @@ if(sem_init(&(params->sem_B), 0, 0) != 0) { // Set up Sem for thread B
 
 void* ThreadA(void *params) {
   //TODO: add your code
+  int sum = 1;
   printf("Thread A: started and reading data from input\n");
   ThreadParams *threadParams = (ThreadParams*) params; // Cast the void pointer to ThreadParams pointer
   sem_wait(&threadParams->sem_A); // Wait for semaphore A to be available
@@ -136,15 +137,14 @@ void* ThreadA(void *params) {
     exit(1);
   }
 
-  int sum = 1; // Initialize sum variable
+  int line= 1;
   char dataLine[255];
   while(fgets(dataLine, sizeof(dataLine), dataInput) != NULL) {
-    printf("Thread A: read line from file: %d; data = %s", sum, dataLine);
+    printf("Thread A: read line %d from file; data = %s", sum, dataLine);
 
     write(threadParams->pipeFile[1], dataLine, strlen(dataLine)); // Write the data line to the pipe
     
     printf("Thread A: successfully wrote line to pipe: %s", dataLine);
-    sum++; // Increment sum for each line read
     
     sem_post(&threadParams->sem_B); // Signal that semaphore B can proceed    
     sem_wait(&threadParams->sem_A); // Wait for semaphore A to be available for the next line
@@ -155,11 +155,14 @@ void* ThreadA(void *params) {
   fclose(dataInput);
   printf("Thread A: Closing\n");
   sem_post(&threadParams->sem_B);
+
+  printf("Thread A: sum = %d\n", sum);
   return NULL;
 }
 
 void* ThreadB(void *params) {
   //TODO: add your code 
+  int sum = 2;
   printf("Thread B: started and waiting for data from Thread A...\n");
   ThreadParams *threadParams = (ThreadParams*) params; // Cast the void pointer to ThreadParams pointer
 
@@ -182,13 +185,14 @@ void* ThreadB(void *params) {
   }
   
   close(threadParams->pipeFile[0]);
+  printf("Thread B: sum = %d\n", sum);
   printf("Thread B: Closing\n");
   return NULL;
 }
 
 void* ThreadC(void *params) {
   //TODO: add your code
-  int sum = 0; // Initialize sum variable
+  int sum = 3; // Initialize sum variable
 
  printf("Thread C: Final sum = %d\n", sum);
  return NULL;
