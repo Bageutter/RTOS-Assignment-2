@@ -1,1 +1,2 @@
-I have no clue wtf is the read_a_text_file-for assigment2.c file is for :(
+Command to compile: gcc assignment2_template.c -o assignment2 -lpthread -lrt -Wall
+Command to run: ./assignment2 data.txt output.txt

@@ -73,20 +73,17 @@ int main(int argc, char const *argv[]) {
 
   // Create Threads
   pthread_create(&(tid[0]), &attr, &ThreadA, (void*)(&params));
-  
-  //TODO: add your code
   pthread_create(&(tid[1]), &attr, &ThreadB, (void*)(&params));
-  //pthread_create(&(tid[2]), &attr, &ThreadC, (void*)(&params));
+  pthread_create(&(tid[2]), &attr, &ThreadC, (void*)(&params));
   
-  //TODO: add your code
   // Wait on threads to finish
   pthread_join(tid[0], NULL);
   pthread_join(tid[1], NULL);
-  //pthread_join(tid[2], NULL);
+  pthread_join(tid[2], NULL);
 
   sem_destroy(&params.sem_A);
   sem_destroy(&params.sem_B);
-  //sem_destroy(&params.sem_C);
+  sem_destroy(&params.sem_C);
 
   return 0;
 }
@@ -116,8 +113,21 @@ if(sem_init(&(params->sem_B), 0, 0) != 0) { // Set up Sem for thread B
   strncpy(params->outputFile, outputFile, sizeof(params->outputFile) - 1);
   params->outputFile[sizeof(params->outputFile) - 1] = '\0';
 
+  // Create pipe for A->B communication
   if (pipe(params->pipeFile) == -1) {
     perror("pipe");
+    exit(1);
+  }
+
+  // Initialize shared memory for B->C communication
+  shm_fd = shm_open(SHARED_MEM_NAME, O_CREAT | O_RDWR, 0600);
+  if (shm_fd == -1) {
+    perror("shm_open");
+    exit(1);
+  }
+
+  if (ftruncate(shm_fd, SHARED_MEM_SIZE) == -1) {
+    perror("ftruncate");
     exit(1);
   }
 
@@ -136,60 +146,135 @@ void* ThreadA(void *params) {
     exit(1);
   }
 
-  int sum = 1; // Initialize sum variable
+  int lineNum = 1; // Initialize line counter
   char dataLine[255];
   while(fgets(dataLine, sizeof(dataLine), dataInput) != NULL) {
-    printf("Thread A: read line from file: %d; data = %s", sum, dataLine);
+    printf("Thread A: read line %d from file; data = %s", lineNum, dataLine);
 
     write(threadParams->pipeFile[1], dataLine, strlen(dataLine)); // Write the data line to the pipe
     
     printf("Thread A: successfully wrote line to pipe: %s", dataLine);
-    sum++; // Increment sum for each line read
+    lineNum++; // Increment line counter for each line read
     
     sem_post(&threadParams->sem_B); // Signal that semaphore B can proceed    
     sem_wait(&threadParams->sem_A); // Wait for semaphore A to be available for the next line
 
-    printf("Thread A: received signal from Thread B, ready to read next line from file...\n");
+    printf("Thread A: received signal from Thread C, ready to read next line from file...\n");
   }
   close(threadParams->pipeFile[1]);
   fclose(dataInput);
   printf("Thread A: Closing\n");
-  sem_post(&threadParams->sem_B);
+  sem_post(&threadParams->sem_B); // Signal B one last time for EOF
   return NULL;
 }
 
 void* ThreadB(void *params) {
-  //TODO: add your code 
   printf("Thread B: started and waiting for data from Thread A...\n");
   ThreadParams *threadParams = (ThreadParams*) params; // Cast the void pointer to ThreadParams pointer
 
-  sem_wait(&threadParams->sem_B); // Wait for semaphore B to be available
-  printf("Thread B: received signal from Thread A, reading data from pipe...\n");
-  
+  // Map shared memory for writing data
+  char *shm_ptr = mmap(NULL, SHARED_MEM_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, shm_fd, 0);
+  if (shm_ptr == MAP_FAILED) {
+    perror("mmap");
+    exit(1);
+  }
+
   char pipeData[255];
   int n;
   
-  while((n = read(threadParams->pipeFile[0], pipeData, sizeof(pipeData)-1)) > 0)
-  {
-    if (n > 0) {
-        pipeData[n] = '\0';
-        printf("Thread B: Successfully Read pipeData = %s\n", pipeData);
+  while(1) {
+    sem_wait(&threadParams->sem_B); // Wait for semaphore B to be available
+    
+    // Try to read from A->B pipe
+    n = read(threadParams->pipeFile[0], pipeData, sizeof(pipeData)-1);
+    
+    if (n <= 0) {
+      // EOF reached
+      printf("Thread B: EOF detected, signaling Thread C\n");
+      // Clear shared memory to signal EOF
+      memset(shm_ptr, 0, SHARED_MEM_SIZE);
+      // Signal Thread C one last time to process EOF
+      sem_post(&threadParams->sem_C);
+      break;
     }
-    sem_post(&threadParams->sem_A); // Signal that semaphore A can proceed for the next line
-    sem_wait(&threadParams->sem_B); // Wait for semaphore B to be available for the next line
-
-    printf("Thread B: received signal from Thread A, reading data from pipe...\n");
+    
+    pipeData[n] = '\0';
+    printf("Thread B: received data from Thread A: %s", pipeData);
+    
+    // Write data to shared memory
+    strncpy(shm_ptr, pipeData, SHARED_MEM_SIZE - 1);
+    shm_ptr[SHARED_MEM_SIZE - 1] = '\0';
+    printf("Thread B: wrote data to shared memory\n");
+    
+    // Signal Thread C to process the data
+    sem_post(&threadParams->sem_C);
   }
   
   close(threadParams->pipeFile[0]);
+  munmap(shm_ptr, SHARED_MEM_SIZE);
   printf("Thread B: Closing\n");
   return NULL;
 }
 
 void* ThreadC(void *params) {
   //TODO: add your code
-  int sum = 0; // Initialize sum variable
+  printf("Thread C: started and waiting for data from Thread B...\n");
+  ThreadParams *threadParams = (ThreadParams*) params; // Cast the void pointer to ThreadParams pointer
 
- printf("Thread C: Final sum = %d\n", sum);
- return NULL;
+  // Map shared memory for reading data
+  char *shm_ptr = mmap(NULL, SHARED_MEM_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, shm_fd, 0);
+  if (shm_ptr == MAP_FAILED) {
+    perror("mmap");
+    exit(1);
+  }
+
+  FILE *dataOutput = fopen(threadParams->outputFile, "w");
+  if (dataOutput == NULL) {
+    perror("Error opening output file");
+    exit(1);
+  }
+
+  int headerFinished = 0; // Flag to track if we've passed the "end_header" line
+  int lineCount = 0;
+  int firstIteration = 1; // Flag for first iteration
+  
+  while(1) {
+    sem_wait(&threadParams->sem_C); // Wait for semaphore C to be available
+    
+    // Check if EOF signal (empty shared memory after first iteration)
+    if (strlen(shm_ptr) == 0 && !firstIteration) {
+      // Empty shared memory after processing data means EOF
+      printf("Thread C: EOF detected, closing...\n");
+      break;
+    }
+    firstIteration = 0;
+    
+    printf("Thread C: received data from Thread B: %s", shm_ptr);
+    
+    // Check if this is the "end_header" line
+    if (strstr(shm_ptr, "end_header") != NULL) {
+      printf("Thread C: Found 'end_header', will start writing content from next line\n");
+      headerFinished = 1;
+    } else if (headerFinished) {
+      // Write data to output file only if we've passed the header
+      fprintf(dataOutput, "%s", shm_ptr);
+      printf("Thread C: Wrote content line to output file\n");
+      lineCount++;
+    } else {
+      printf("Thread C: Skipping header line\n");
+    }
+    
+    // Clear shared memory before signaling Thread A
+    memset(shm_ptr, 0, SHARED_MEM_SIZE);
+    
+    // Signal Thread A that output is complete
+    sem_post(&threadParams->sem_A);
+  }
+  
+  printf("Thread C: Total content lines written: %d\n", lineCount);
+  fclose(dataOutput);
+  munmap(shm_ptr, SHARED_MEM_SIZE);
+  shm_unlink(SHARED_MEM_NAME);
+  printf("Thread C: Closing\n");
+  return NULL;
 }
