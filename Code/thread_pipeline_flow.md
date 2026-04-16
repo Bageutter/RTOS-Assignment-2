@@ -67,4 +67,9 @@ flowchart LR
     %% Data flow hints
     A1P -.->|A->B data| B1R
     B1M -.->|B->C data| C1R
+
+    %% Semaphore connections
+    A1B -.->|sem_B| B1W
+    B1C -.->|sem_C| C1W
+    C1A -.->|sem_A| A1W
 ```
