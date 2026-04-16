@@ -185,16 +185,16 @@ void* ThreadB(void *params) {
   }
 
   char pipeData[255];
-  int n;
+  int dataLength;
   int sum = 0; // Initialize sum
   
   while(1) {
     sem_wait(&threadParams->sem_B); // Wait for semaphore B to be available
     sum++; // Increment sum for each line processed
     // Try to read from A->B pipe
-    n = read(threadParams->pipeFile[0], pipeData, sizeof(pipeData)-1);
+    dataLength = read(threadParams->pipeFile[0], pipeData, sizeof(pipeData)-1);
     
-    if (n <= 0) {
+    if (dataLength <= 0) {
       // EOF reached
       printf("\033[94mThread B: EOF detected, signaling Thread C\033[0m\n");
       // Clear shared memory to signal EOF
@@ -204,7 +204,7 @@ void* ThreadB(void *params) {
       break;
     }
     
-    pipeData[n] = '\0';
+    pipeData[dataLength] = '\0';
     printf("\033[94mThread B: received data from Thread A: %s\033[0m\n", pipeData);
     
     // Write data to shared memory
@@ -258,7 +258,7 @@ void* ThreadC(void *params) {
     printf("\033[33mThread C: received data from Thread B: %s\033[0m\n", shm_ptr);
     
     // Check if this is the "end_header" line
-    if (strstr(shm_ptr, "end_header") != NULL) {
+    if (!headerFinished && (strcmp(shm_ptr, "end_header\n") == 0 || strcmp(shm_ptr, "end_header") == 0)) {
       printf("\033[33mThread C: Found 'end_header', will start writing content from next line\033[0m\n");
       headerFinished = 1;
     } else if (headerFinished) {
@@ -267,6 +267,7 @@ void* ThreadC(void *params) {
       printf("\033[33mThread C: Wrote content line to output file\033[0m\n");
       sum++;
     } else {
+      // Discard line otherwise
       printf("\033[33mThread C: Skipping header line\033[0m\n");
     }
     
@@ -277,6 +278,7 @@ void* ThreadC(void *params) {
     sem_post(&threadParams->sem_A);
   }
   
+  printf("Thread C: Total content lines written: %d\n", sum);
   fclose(dataOutput);
   munmap(shm_ptr, SHARED_MEM_SIZE);
   shm_unlink(SHARED_MEM_NAME);
