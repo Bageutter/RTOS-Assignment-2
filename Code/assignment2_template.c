@@ -180,15 +180,15 @@ void* ThreadB(void *params) {
   }
 
   char pipeData[255];
-  int n;
+  int dataLength;
   
   while(1) {
     sem_wait(&threadParams->sem_B); // Wait for semaphore B to be available
     
     // Try to read from A->B pipe
-    n = read(threadParams->pipeFile[0], pipeData, sizeof(pipeData)-1);
+    dataLength = read(threadParams->pipeFile[0], pipeData, sizeof(pipeData)-1);
     
-    if (n <= 0) {
+    if (dataLength <= 0) {
       // EOF reached
       printf("Thread B: EOF detected, signaling Thread C\n");
       // Clear shared memory to signal EOF
@@ -198,7 +198,7 @@ void* ThreadB(void *params) {
       break;
     }
     
-    pipeData[n] = '\0';
+    pipeData[dataLength] = '\0';
     printf("Thread B: received data from Thread A: %s", pipeData);
     
     // Write data to shared memory
@@ -235,7 +235,7 @@ void* ThreadC(void *params) {
   }
 
   int headerFinished = 0; // Flag to track if we've passed the "end_header" line
-  int lineCount = 0;
+  int nonHeaderLineCount = 0;
   int firstIteration = 1; // Flag for first iteration
   
   while(1) {
@@ -252,15 +252,16 @@ void* ThreadC(void *params) {
     printf("Thread C: received data from Thread B: %s", shm_ptr);
     
     // Check if this is the "end_header" line
-    if (strstr(shm_ptr, "end_header") != NULL) {
+    if (!headerFinished && (strcmp(shm_ptr, "end_header\n") == 0 || strcmp(shm_ptr, "end_header") == 0)) {
       printf("Thread C: Found 'end_header', will start writing content from next line\n");
       headerFinished = 1;
     } else if (headerFinished) {
       // Write data to output file only if we've passed the header
       fprintf(dataOutput, "%s", shm_ptr);
       printf("Thread C: Wrote content line to output file\n");
-      lineCount++;
+      nonHeaderLineCount++;
     } else {
+      // Discard line otherwise
       printf("Thread C: Skipping header line\n");
     }
     
@@ -271,7 +272,7 @@ void* ThreadC(void *params) {
     sem_post(&threadParams->sem_A);
   }
   
-  printf("Thread C: Total content lines written: %d\n", lineCount);
+  printf("Thread C: Total content lines written: %d\n", nonHeaderLineCount);
   fclose(dataOutput);
   munmap(shm_ptr, SHARED_MEM_SIZE);
   shm_unlink(SHARED_MEM_NAME);
